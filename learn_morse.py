@@ -1,3 +1,6 @@
+import sys
+from enum import Enum
+from abc import ABC, abstractmethod
 import random
 from itertools import zip_longest
 from time import time
@@ -20,6 +23,11 @@ def encode(chars: str):
     return " ".join(CODES.get(c, c) for c in chars.lower())
 
 
+def decode(morse: str):
+    decodes = {v: k for k, v in CODES.items()}
+    "".join(decodes[c] for c in morse.split())
+
+
 class _RandomLetters:
     letters = _keys[:-1]
 
@@ -27,10 +35,13 @@ class _RandomLetters:
         return random.choice(self.letters)
 
 
-class BaseGame:
-    def __init__(self):
+class BaseGame(ABC):
+    """Abstract base class for Morse code games."""
+
+    def __init__(self, **_):
         self.score = self.rounds = 0
 
+    # Implements the game loop logic with hooks for game events.
     def run(self):
         self.on_game_start()
         try:
@@ -50,29 +61,41 @@ class BaseGame:
             self.on_game_end()
 
     def on_game_start(self):
+        """Hook for actions occuring before the game starts."""
         pass
 
+    @abstractmethod
     def get_word(self) -> str:
+        """Returns a word or character to be guessed."""
         raise NotImplementedError
 
+    @abstractmethod
     def write_prompt(self, word: str):
+        """Writes the prompt to the console with the word to guess."""
         raise NotImplementedError
 
+    @abstractmethod
     def check_guess(self, word: str, guess: str) -> bool:
+        """Checks if the guess is correct."""
         raise NotImplementedError
 
     def on_correct_guess(self, word: str, guess: str):
+        """Hook for actions after a correct guess."""
         pass
 
     def on_incorrect_guess(self, word: str, guess: str):
+        """Hook for actions after an incorrect guess."""
         pass
 
     def on_game_end(self):
+        """Hook for actions occuring after the game ends."""
         s, r = self.score, self.rounds
         print(f"\n{s}/{r} ({s / r:.2%})")  # e.g. 16/20 (80.00%)
 
 
 class DecodeGame(BaseGame):
+    """Game for decoding Morse code into English text."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.randomizer = _RandomLetters()
@@ -94,6 +117,8 @@ class DecodeGame(BaseGame):
 
 
 class EncodeGame(BaseGame):
+    """Game for translating random words or letters into Morse code."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.randomizer = _RandomLetters()
@@ -119,16 +144,21 @@ class EncodeGame(BaseGame):
 
 
 class BlindEncodeGame(EncodeGame):
+    """Game for encoding words without seeing them. (Hard)"""
+
     def write_prompt(self, word: str):
         prompt = "Encode (press enter when ready): "
-        input(f"{prompt}\033[34m{word}\033[0m ")
-        print(f"\033[1F\033[0J{prompt}<hidden>")
+        input(f"{prompt}\033[34m{word}\033[0m ")  # Prints the word in blue.
+        print(f"\033[1F\033[0J{prompt}<hidden>")  # Hides the word.
 
 
 class AlphabetGame(BaseGame):
+    """Tutorial game for learning the Morse code alphabet."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.iter_alphabet = (chr(i) for i in range(97, 123))
+        self.round_limit = 26  # Runs full alphabet in timed games.
 
     def get_word(self) -> str:
         return next(self.iter_alphabet)
@@ -143,66 +173,103 @@ class AlphabetGame(BaseGame):
         print(f"\033[31m{encode(char)}\033[0m")
 
 
-def timed_game(cls: type):
-    class Timed(cls):
-        def __init__(self, round_limit: int = 20, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.round_limit = round_limit
-            self.start_time = None
-            self.end_time = None
+class TimedMixin:
+    """Mixin for adding a timer and round limit to games."""
 
-        def get_word(self):
-            if self.rounds >= self.round_limit:
-                raise StopIteration
-            return super().get_word()
+    def __init__(self, round_limit: int = 20, *args, **kwargs):
+        self.round_limit = round_limit
+        self.start_time = None
+        self.end_time = None
+        super().__init__(*args, **kwargs)
 
-        def on_game_start(self):
-            self.start_time = time()
-            super().on_game_start()
+    def get_word(self):
+        if self.rounds >= self.round_limit:
+            raise StopIteration
+        return super().get_word()
 
-        def on_game_end(self):
-            end = self.end_time = time()
-            start = self.start_time
-            s, r = self.score, self.rounds
-            print(f"\n{s}/{r} ({s / r:.2%}) in {end - start:0.2f}s")
+    def on_game_start(self):
+        self.start_time = time()
+        return super().on_game_start()
 
-    return Timed
+    def on_game_end(self):
+        end = self.end_time = time()
+        start = self.start_time
+        s, r = self.score, self.rounds
+        print(f"\n{s}/{r} ({s / r:.2%}) in {end - start:0.2f}s")
 
 
-def main(g: str = None, words: bool = False,
-         timed: bool = False, blind: bool = False):
+class TimedDecodeGame(TimedMixin, DecodeGame):
+    pass
 
-    games = {
-        "e": EncodeGame, "d": DecodeGame,
-        "a": AlphabetGame, "b": BlindEncodeGame
-    }
+class TimedEncodeGame(TimedMixin, EncodeGame):
+    pass
 
-    game = timed_game(games[g]) if timed else games[g]
-    if g == "a":
-        game().run()
-    else:
-        g = game()
-        if words:
-            # Large import (database). Only needed here.
-            from random_word import RandomWords
-            g.randomizer = RandomWords()
-        g.run()
+class TimedBlindEncodeGame(TimedMixin, BlindEncodeGame):
+    pass
+
+class TimedAlphabetGame(TimedMixin, AlphabetGame):
+    pass
+
+
+class Game(Enum):
+    DECODE = "DecodeGame"
+    ENCODE = "EncodeGame"
+    BLIND = "BlindEncodeGame"
+    ALPHABET = "AlphabetGame"
+    TIMED_DECODE = "TimedDecodeGame"
+    TIMED_ENCODE = "TimedEncodeGame"
+    TIMED_BLIND = "TimedBlindEncodeGame"
+    TIMED_ALPHABET = "TimedAlphabetGame"
+
+    def create(self, *args, **kwargs):
+        return globals()[self.value](*args, **kwargs)
+
+
+def main(
+    game: str,
+    wordgame: bool = False,
+    timed: bool = False,
+    rounds: int = 20,
+):
+
+    game_name = "TIMED_" * timed + game.upper()
+    try:
+        game = Game[game_name].create(round_limit=rounds)
+    except KeyError:
+        print(f"Unknown game: {game_name}")
+        return 1
+
+    if wordgame and not game_name.endswith("ALPHABET"):
+        # Large database import; only needed here.
+        from random_word import RandomWords
+        game.randomizer = RandomWords()
+
+    game.run()
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument("-g", "--game", default=None)
-    parser.add_argument("-w", "--words", action="store_true")
-    parser.add_argument("-e", "--encode", default=None)
-    parser.add_argument("-d", "--decode", default=None)
-    parser.add_argument("-t", "--timed", action="store_true")
+
+    parser = ArgumentParser(
+        description="Games to teach Morse code. End untimed games with Ctrl+C."
+    )
+    parser.add_argument("-g", "--game", default="DECODE",
+                        help="game to play: DECODE, ENCODE, BLIND or ALPHABET")
+    parser.add_argument("-w", "--wordgame", action="store_true",
+                        help="generate random words instead of letters")
+    parser.add_argument("-t", "--timed", action="store_true",
+                        help="play a timed game")
+    parser.add_argument("-r", "--rounds", type=int, default=20,
+                        help="number of rounds in a timed game")
+    parser.add_argument("-x", "--translate",
+                        help="encode or decode the given text or Morse code")
 
     args = parser.parse_args()
 
-    if args.encode is not None:
-        print(encode(args.encode))
-    elif args.decode is not None:
-        decodes = {v: k for k, v in CODES.items()}
-        print("".join(decodes[c] for c in args.decode.split()))
+    if t := args.translate is not None:
+        if all(m in _values for m in t.split()):
+            sys.exit(print(decode(t)))
+        else:
+            sys.exit(print(encode(t)))
+
     else:
-        main(args.game, args.words, args.timed)
+        sys.exit(main(args.game, args.wordgame, args.timed, args.rounds))
