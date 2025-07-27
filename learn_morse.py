@@ -7,12 +7,11 @@ from time import time
 from argparse import ArgumentParser
 
 
-_values = [
-    ".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---",
-    "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-",
-    "...-", ".--", "-..-", "-.--", "--..", "-----", ".----", "..---", "...--",
-    "....-", ".....", "-....", "--...", "---..", "----.", "/"
-]
+_values = (
+    ".- -... -.-. -.. . ..-. --. .... .. .--- -.- .-.. -- -. --- "
+    ".--. --.- .-. ... - ..- ...- .-- -..- -.-- --.. ----- .---- "
+    "..--- ...-- ....- ..... -.... --... ---.. ----. /"
+).split()
 
 _keys = "abcdefghijklmnopqrstuvwxyz0123456789 "
 
@@ -25,7 +24,7 @@ def encode(chars: str):
 
 def decode(morse: str):
     decodes = {v: k for k, v in CODES.items()}
-    "".join(decodes[c] for c in morse.split())
+    return "".join(decodes[c] for c in morse.split())
 
 
 class _RandomLetters:
@@ -199,16 +198,16 @@ class TimedMixin:
 
 
 class TimedDecodeGame(TimedMixin, DecodeGame):
-    pass
+    __doc__ = DecodeGame.__doc__ + " [TIMED]"
 
 class TimedEncodeGame(TimedMixin, EncodeGame):
-    pass
+    __doc__ = EncodeGame.__doc__ + " [TIMED]"
 
 class TimedBlindEncodeGame(TimedMixin, BlindEncodeGame):
-    pass
+    __doc__ = BlindEncodeGame.__doc__ + " [TIMED]"
 
 class TimedAlphabetGame(TimedMixin, AlphabetGame):
-    pass
+    __doc__ = AlphabetGame.__doc__ + " [TIMED]"
 
 
 class Game(Enum):
@@ -216,13 +215,10 @@ class Game(Enum):
     ENCODE = "EncodeGame"
     BLIND = "BlindEncodeGame"
     ALPHABET = "AlphabetGame"
-    TIMED_DECODE = "TimedDecodeGame"
-    TIMED_ENCODE = "TimedEncodeGame"
-    TIMED_BLIND = "TimedBlindEncodeGame"
-    TIMED_ALPHABET = "TimedAlphabetGame"
 
-    def create(self, *args, **kwargs):
-        return globals()[self.value](*args, **kwargs)
+    def create(self, timed: bool = False, *args, **kwargs):
+        class_name = "Timed" * timed + self.value
+        return globals()[class_name](*args, **kwargs)
 
 
 def main(
@@ -232,9 +228,9 @@ def main(
     rounds: int = 20,
 ):
 
-    game_name = "TIMED_" * timed + game.upper()
+    game_name = game.upper()
     try:
-        game = Game[game_name].create(round_limit=rounds)
+        game = Game[game_name].create(timed, round_limit=rounds)
     except KeyError:
         print(f"Unknown game: {game_name}")
         return 1
@@ -265,7 +261,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if t := args.translate is not None:
+    if (t := args.translate) is not None:
         if all(m in _values for m in t.split()):
             sys.exit(print(decode(t)))
         else:
