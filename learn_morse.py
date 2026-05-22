@@ -1,10 +1,18 @@
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+#     "random-word>=1.0.13",
+# ]
+# ///
+
 import sys
-from enum import Enum
+from enum import StrEnum
 from abc import ABC, abstractmethod
 import random
 from itertools import zip_longest
 from time import time
 from argparse import ArgumentParser
+from typing import Callable
 
 
 _values = (
@@ -27,6 +35,22 @@ def decode(morse: str):
     return "".join(decodes[c] for c in morse.split())
 
 
+def encode_binary(chars: str):
+    return " ".join(f"{ord(c):b}" for c in chars)
+
+
+def decode_binary(code: str):
+    return "".join(chr(int(n, base=2)) for n in code.split())
+
+
+def decode_hex(code: str):
+    return "".join(chr(int(n, base=16)) for n in code.split())
+
+
+def encode_hex(chars: str):
+    return " ".join(f"{ord(c):x}" for c in chars)
+
+
 class _RandomLetters:
     letters = _keys[:-1]
 
@@ -37,11 +61,24 @@ class _RandomLetters:
 class BaseGame(ABC):
     """Abstract base class for Morse code games."""
 
+    _registry = {}
+
     def __init__(self, **_):
         self.score = self.rounds = 0
+        self.encode = encode
+
+    def __init_subclass__(cls):
+        super().__init_subclass__()
+        cls._registry[cls.__name__] = cls
+
+    @classmethod
+    def game_registry(cls) -> dict['BaseGame']:
+        """Returns a dictionary of games subclassing `BaseGame`."""
+        return cls._registry.copy()
 
     # Implements the game loop logic with hooks for game events.
     def run(self):
+        """Runs the game loop."""
         self.on_game_start()
         try:
             while True:
@@ -56,7 +93,7 @@ class BaseGame(ABC):
                 else:
                     self.on_incorrect_guess(word, guess)
 
-        except (KeyboardInterrupt, StopIteration):
+        except (KeyboardInterrupt, StopIteration, EOFError):
             self.on_game_end()
 
     def on_game_start(self):
@@ -89,6 +126,7 @@ class BaseGame(ABC):
     def on_game_end(self):
         """Hook for actions occuring after the game ends."""
         s, r = self.score, self.rounds
+        r = r or 1
         print(f"\n{s}/{r} ({s / r:.2%})")  # e.g. 16/20 (80.00%)
 
 
@@ -103,7 +141,7 @@ class DecodeGame(BaseGame):
         return self.randomizer.get_random_word()
 
     def write_prompt(self, word: str):
-        print("Decode:", encode(word))
+        print("Decode:", self.encode(word))
 
     def check_guess(self, word: str, guess: str):
         return word == guess
@@ -129,13 +167,13 @@ class EncodeGame(BaseGame):
         print("Encode:", word)
 
     def check_guess(self, word: str, guess: str):
-        return encode(word) == " ".join(guess.split())
+        return self.encode(word) == " ".join(guess.split())
 
     def on_correct_guess(self, word: str, guess: str):
         print(f"\033[1F\033[32m{guess} \033[0m")
 
     def on_incorrect_guess(self, word: str, guess: str):
-        truth = encode(word).split()
+        truth = self.encode(word).split()
         for t, g in zip_longest(truth, guess.split(), fillvalue="x"):
             esc_code = "\033[32m" if t == g else "\033[31m"
             print(esc_code + t, end=" ")
@@ -147,7 +185,7 @@ class BlindEncodeGame(EncodeGame):
 
     def write_prompt(self, word: str):
         prompt = "Encode (press enter when ready): "
-        input(f"{prompt}\033[34m{word}\033[0m ")  # Prints the word in blue.
+        input(f"{prompt}\033[36m{word}\033[0m ")  # Prints the word in blue.
         print(f"\033[1F\033[0J{prompt}<hidden>")  # Hides the word.
 
 
@@ -166,10 +204,10 @@ class AlphabetGame(BaseGame):
         print("Encode:", char)
 
     def check_guess(self, char: str, guess: str):
-        return encode(char) == guess
+        return self.encode(char) == guess
 
     def on_incorrect_guess(self, char: str, guess: str):
-        print(f"\033[31m{encode(char)}\033[0m")
+        print(f"\033[31m{self.encode(char)}\033[0m")
 
 
 class TimedMixin:
@@ -180,6 +218,10 @@ class TimedMixin:
         self.start_time = None
         self.end_time = None
         super().__init__(*args, **kwargs)
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.__doc__ = cls.__mro__[2].__doc__ + " [TIMED]"
 
     def get_word(self):
         if self.rounds >= self.round_limit:
@@ -198,27 +240,45 @@ class TimedMixin:
 
 
 class TimedDecodeGame(TimedMixin, DecodeGame):
-    __doc__ = DecodeGame.__doc__ + " [TIMED]"
+    pass
 
 class TimedEncodeGame(TimedMixin, EncodeGame):
-    __doc__ = EncodeGame.__doc__ + " [TIMED]"
+    pass
 
 class TimedBlindEncodeGame(TimedMixin, BlindEncodeGame):
-    __doc__ = BlindEncodeGame.__doc__ + " [TIMED]"
+    pass
 
 class TimedAlphabetGame(TimedMixin, AlphabetGame):
-    __doc__ = AlphabetGame.__doc__ + " [TIMED]"
+    pass
 
 
-class Game(Enum):
+class Game(StrEnum):
     DECODE = "DecodeGame"
     ENCODE = "EncodeGame"
     BLIND = "BlindEncodeGame"
     ALPHABET = "AlphabetGame"
 
-    def create(self, timed: bool = False, *args, **kwargs):
+    def create(
+        self,
+        timed: bool = False,
+        binary: bool = False,
+        hexadecimal: bool = False,
+        *args,
+        **kwargs
+    ):
+        """Creates an instance of the game."""
+
+        binary = binary and not hexadecimal
+
         class_name = "Timed" * timed + self.value
-        return globals()[class_name](*args, **kwargs)
+        game: BaseGame = BaseGame.game_registry()[class_name](*args, **kwargs)
+
+        if binary:
+            game.set_encode(encode_binary)
+        if hexadecimal:
+            game.set_encode(encode_hex)
+
+        return game
 
 
 def main(
@@ -226,11 +286,18 @@ def main(
     wordgame: bool = False,
     timed: bool = False,
     rounds: int = 20,
+    binary: bool = False,
+    hexadecimal: bool = False,
 ):
 
     game_name = game.upper()
     try:
-        game = Game[game_name].create(timed, round_limit=rounds)
+        game = Game[game_name].create(
+            timed,
+            binary,
+            hexadecimal,
+            round_limit=rounds,
+        )
     except KeyError:
         print(f"Unknown game: {game_name}")
         return 1
@@ -256,8 +323,12 @@ if __name__ == "__main__":
                         help="play a timed game")
     parser.add_argument("-r", "--rounds", type=int, default=20,
                         help="number of rounds in a timed game")
-    parser.add_argument("-x", "--translate",
+    parser.add_argument("-p", "--translate",
                         help="encode or decode the given text or Morse code")
+    parser.add_argument("-b", "--binary", action="store_true",
+                        help="encode letters to binary instead of Morse")
+    parser.add_argument("-x", "--hex", action="store_true",
+                        help="encode letters to hexadecimal instead of Morse")
 
     args = parser.parse_args()
 
@@ -268,4 +339,11 @@ if __name__ == "__main__":
             sys.exit(print(encode(t)))
 
     else:
-        sys.exit(main(args.game, args.wordgame, args.timed, args.rounds))
+        sys.exit(main(
+            args.game,
+            args.wordgame,
+            args.timed,
+            args.rounds,
+            args.binary,
+            args.hex,
+        ))
